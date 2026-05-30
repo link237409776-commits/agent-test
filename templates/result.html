@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>问答结果</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 900px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+    }
+
+    pre {
+      background: #f7f7f7;
+      padding: 1rem;
+      white-space: pre-wrap
+    }
+
+    .evidence {
+      border-left: 3px solid #ddd;
+      padding-left: 1rem;
+      margin: 0.5rem 0
+    }
+  </style>
+</head>
+
+<body>
+  <h1>问答结果</h1>
+  <p><strong>问题：</strong> {{ question }}</p>
+
+  <h2>答案</h2>
+  <pre>{{ answer.answer }}</pre>
+
+  <h2>来源证据</h2>
+  {% if answer.evidences %}
+  {% for ev in answer.evidences %}
+  <div class="evidence">
+    <div><strong>{{ ev.chunk_id }}</strong> | 第 {{ ev.page }} 页{% if ev.clause_id %}，{{ ev.clause_id }}{% endif %} |
+      score={{ ev.score }}</div>
+    <div>{{ ev.text }}</div>
+  </div>
+  {% endfor %}
+  {% else %}
+  <p>无证据。</p>
+  {% endif %}
+
+  <h2>自检</h2>
+  <pre>{{ answer.self_check | tojson(indent=2, ensure_ascii=False) }}</pre>
+
+  <p><a href="/">返回</a></p>
+</body>
+
+</html>

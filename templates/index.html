@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>文档问答 Agent</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+    }
+
+    label {
+      display: block;
+      margin-top: 1rem;
+    }
+
+    textarea {
+      width: 100%;
+      height: 120px
+    }
+
+    input[type=text] {
+      width: 100%
+    }
+
+    .note {
+      color: #666;
+      font-size: 0.9em
+    }
+  </style>
+</head>
+
+<body>
+  <div class="card">
+    <h1>文档问答</h1>
+    {% if loaded_count is defined and loaded_count > 0 %}
+    <div class="note">已加载 {{ loaded_count }} 个文档（自动加载）</div>
+    {% elif loaded_count is defined %}
+    <div class="note">未加载文档，提交时可上传或填写路径，或将文档放入 `doc` 目录并重启服务以自动加载。</div>
+    {% endif %}
+    {% with messages = get_flashed_messages() %}
+    {% if messages %}
+    <ul class="flashes">
+      {% for msg in messages %}
+      <li>{{ msg }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% endwith %}
+
+    <form id="qa-form" action="/ask" method="post" enctype="multipart/form-data">
+      <div class="row">
+        <label class="label">问题</label>
+        <textarea name="question" placeholder="在这里输入你的问题"></textarea>
+      </div>
+
+      <div class="row two-cols">
+        <div>
+          <label class="label">模型地址（Base URL）</label>
+          <input type="text" name="base_url" value="{{ config.base_url if config else '' }}"
+            placeholder="https://api.example.com">
+        </div>
+        <div>
+          <label class="label">模型名称</label>
+          <input type="text" name="model" value="{{ config.model if config else '' }}" placeholder="model-name">
+        </div>
+      </div>
+
+      <div class="row">
+        <label class="label">API Key</label>
+        {% if config and config.api_key %}
+        <div class="note">已配置（不会回显），如需替换请填写新 Key</div>
+        <input type="password" name="api_key" placeholder="填写以覆盖已保存的 key">
+        {% else %}
+        <input type="password" name="api_key" placeholder="sk-...">
+        {% endif %}
+      </div>
+
+      <!-- Preserve other settings as hidden fields so server keeps them if unused -->
+      <input type="hidden" name="temperature" value="{{ config.temperature if config else '0.1' }}">
+      <input type="hidden" name="timeout" value="{{ config.timeout if config else '60' }}">
+      <input type="hidden" name="system_prompt" value='{{ config.system_prompt | tojson | safe if config else "" }}'>
+      <input type="hidden" name="user_prompt_template"
+        value='{{ config.user_prompt_template | tojson | safe if config else "" }}'>
+
+      <div class="row actions">
+        <button type="submit" class="primary">提交提问</button>
+        <button type="button" id="clear-btn">清空输出</button>
+      </div>
+    </form>
+  </div>
+  <h2 style="text-align:center; margin-top:1.2rem">实时输出</h2>
+  <div id="stream-result" class="result" aria-live="polite"></div>
+
+  <script>
+    const form = document.getElementById('qa-form');
+    const result = document.getElementById('stream-result');
+    const clearBtn = document.getElementById('clear-btn');
+    clearBtn.addEventListener('click', () => { result.textContent = ''; });
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      result.textContent = '';
+      const fd = new FormData(form);
+      try {
+        const resp = await fetch('/ask_stream', { method: 'POST', body: fd });
+        if (!resp.ok) {
+          result.textContent = '请求失败: ' + resp.statusText;
+          return;
+        }
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        let firstAnswer = true;
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let parts = buf.split('\n\n');
+          buf = parts.pop();
+          for (const part of parts) {
+            const line = part.trim();
+            if (!line) continue;
+            // expect format: data: TYPE: payload
+            if (line.startsWith('data:')) {
+              const content = line.slice(5).trim();
+              if (content.startsWith('PROGRESS:')) {
+                result.textContent += '[进度] ' + content.slice(9).trim() + '\n';
+              } else if (content.startsWith('EVIDENCE:')) {
+                try {
+                  const ev = JSON.parse(content.slice(9).trim());
+                  result.textContent += '[证据] ' + (ev.chunk_id || '') + ' | 第' + ev.page + '页 | score=' + ev.score + '\n' + ev.text + '\n\n';
+                } catch (err) {
+                  result.textContent += content + '\n';
+                }
+              } else if (content.startsWith('ANSWER:')) {
+                try {
+                  const obj = JSON.parse(content.slice(7).trim());
+                  // append header only for the first chunk
+                  if (firstAnswer) {
+                    result.textContent += '\n[答案]\n';
+                    firstAnswer = false;
+                  }
+                  result.textContent += obj.answer;
+                } catch (err) {
+                  result.textContent += content + '\n';
+                }
+              } else if (content.startsWith('SELF_CHECK:')) {
+                try {
+                  const sc = JSON.parse(content.slice(11).trim());
+                  result.textContent += '[自检] ' + JSON.stringify(sc, null, 2) + '\n';
+                } catch (err) {
+                  result.textContent += content + '\n';
+                }
+              } else if (content.startsWith('ERROR:')) {
+                result.textContent += '[错误] ' + content.slice(6).trim() + '\n';
+              } else if (content.startsWith('DONE')) {
+                result.textContent += '\n[完成]\n';
+              } else {
+                result.textContent += content + '\n';
+              }
+            } else {
+              result.textContent += line + '\n';
+            }
+          }
+        }
+        if (buf && buf.trim()) {
+          result.textContent += buf.trim() + '\n';
+        }
+      } catch (err) {
+        result.textContent += '[网络错误] ' + err + '\n';
+      }
+    });
+  </script>
+  <style>
+    body {
+      background: #f1f5f9;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+      padding: 1.2rem 1.4rem;
+    }
+
+    h1 {
+      margin: 0 0 0.6rem 0;
+      font-size: 1.4rem;
+    }
+
+    .label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 0.4rem
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 140px;
+      padding: 0.6rem;
+      border-radius: 6px;
+      border: 1px solid #e6eef6
+    }
+
+    input[type=text],
+    input[type=password] {
+      width: 100%;
+      padding: 0.56rem;
+      border-radius: 6px;
+      border: 1px solid #e6eef6
+    }
+
+    .row {
+      margin-top: 0.9rem
+    }
+
+    .two-cols {
+      display: flex;
+      gap: 0.8rem
+    }
+
+    .two-cols>div {
+      flex: 1
+    }
+
+    .actions {
+      display: flex;
+      gap: 0.6rem;
+      margin-top: 1rem
+    }
+
+    button {
+      padding: 0.6rem 0.9rem;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer
+    }
+
+    .primary {
+      background: linear-gradient(90deg, #3b82f6, #06b6d4);
+      color: #fff;
+      box-shadow: 0 6px 12px rgba(59, 130, 246, 0.18)
+    }
+
+    #clear-btn {
+      background: #eef2ff
+    }
+
+    .result {
+      white-space: pre-wrap;
+      background: #0f172a;
+      color: #e6f0ff;
+      padding: 1rem;
+      border-radius: 8px;
+      min-height: 180px;
+      margin-top: 0.6rem
+    }
+
+    .note {
+      color: #64748b;
+      font-size: 0.9rem
+    }
+
+    .flashes {
+      list-style: none;
+      padding: 0;
+      margin: 0.6rem 0 0 0
+    }
+
+    .flashes li {
+      color: #b91c1c
+    }
+
+    @media (max-width:600px) {
+      .two-cols {
+        flex-direction: column
+      }
+    }
+  </style>
+</body>
+
+</html>

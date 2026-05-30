@@ -1,0 +1,6 @@
+pymupdf>=1.24.0
+pdfplumber>=0.11.0
+paddleocr>=3.6.0
+paddlepaddle>=3.2,<3.3
+pytest>=8.0.0
+flask>=2.0.0

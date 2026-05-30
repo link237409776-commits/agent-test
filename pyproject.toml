@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minimal-docqa-agent"
+version = "0.1.0"
+description = "Minimal evidence-first PDF document QA agent prototype"
+requires-python = ">=3.10"
+dependencies = [
+  "pymupdf>=1.24.0",
+  "pdfplumber>=0.11.0",
+  "paddleocr>=3.6.0",
+  "paddlepaddle>=3.2,<3.3",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0.0"]
+
+[project.scripts]
+docqa-agent = "docqa_agent.chat_window:main"
